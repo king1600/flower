@@ -170,9 +170,11 @@ pub trait Keyboard {
     fn function_lock(&self) -> bool;
 }
 
+const KEY_STATE_LENGTH: usize = 0xFF / 8;
+
 /// Handles interface to a PS/2 keyboard, if available
 pub struct Ps2Keyboard {
-    key_states: [bool; 0xFF],
+    key_state_map: [u8; KEY_STATE_LENGTH],
     state: StateFlags,
 }
 
@@ -188,7 +190,7 @@ impl Ps2Keyboard {
     pub fn new() -> Self {
         ps2::CONTROLLER.lock().set_keyboard_change_listener(Ps2Keyboard::on_keyboard_change);
         Ps2Keyboard {
-            key_states: [false; 0xFF],
+            key_state_map: [0; KEY_STATE_LENGTH],
             state: StateFlags::empty(),
         }
     }
@@ -255,7 +257,14 @@ impl Keyboard for Ps2Keyboard {
             if let Some(event) = event {
                 // Update states such as caps lock with this key event
                 self.handle_state(event);
-                self.key_states[event.keycode as usize] = scancode.make;
+                let index = event.keycode as usize;
+                let bit = 1 << (index % 8);
+                let bucket_index = index / 8;
+                if scancode.make {
+                    self.key_state_map[bucket_index] |= bit;
+                } else {
+                    self.key_state_map[bucket_index] &= !bit;
+                }
             } else {
                 // If we received a scancode but it was invalid, the device probably changed.
                 keyboard.set_port_dirty(true);
@@ -265,7 +274,10 @@ impl Keyboard for Ps2Keyboard {
     }
 
     fn pressed(&self, keycode: Keycode) -> bool {
-        *self.key_states.get(keycode as usize).unwrap_or(&false)
+        let index = keycode as usize;
+        let bucket = *self.key_state_map.get(index / 8).unwrap_or(0);
+        let bit_index = (index % 8);
+        ((bucket >> bit_index) & 1) != 0
     }
 
     fn num_lock(&self) -> bool { self.state.contains(StateFlags::NUM_LOCK) }
