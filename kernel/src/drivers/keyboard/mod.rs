@@ -28,12 +28,26 @@ pub mod keymap;
 
 bitflags! {
     pub struct ModifierFlags: u8 {
-        /// If a CTRL modifier is active
-        const CTRL = 1 << 0;
-        /// If an ALT modifier is active
-        const ALT = 1 << 1;
         /// If a SHIFT modifier is active
-        const SHIFT = 1 << 2;
+        const SHIFT = 1 << 0;
+        /// If the NUM_LOCK modifier is active
+        const NUM_LOCK = 1 << 1;
+        /// If a CAPS_LOCK modifier is active
+        const CAPS_LOCK = 1 << 2;
+    }
+}
+
+bitflags! {
+    /// Flags to hold the current keyboard lock states
+    pub struct StateFlags: u8 {
+        /// If num lock is enabled
+        const NUM_LOCK = 1 << 0;
+        /// If scroll lock is enabled
+        const SCROLL_LOCK = 1 << 1;
+        /// If caps lock is enabled
+        const CAPS_LOCK = 1 << 2;
+        /// If function lock is enabled
+        const FUNCTION_LOCK = 1 << 3;
     }
 }
 
@@ -44,14 +58,50 @@ impl ModifierFlags {
     ///
     /// ```rust
     /// let modifiers = ModifierFlags::from_modifiers(true, true, true);
-    /// assert_eq!(modifiers, ModifierFlags::CTRL | ModifierFlags::ALT | ModifierFlags::SHIFT);
+    /// assert_eq!(modifiers, ModifierFlags::SHIFT | ModifierFlags::NUM_LOCK | ModifierFlags::CAPS_LOCK);
     /// ```
-    fn from_modifiers(ctrl: bool, alt: bool, shift: bool) -> Self {
+    fn from_modifiers(shift: bool, num_lock: bool, caps_lock: bool) -> Self {
         let mut flags = ModifierFlags::empty();
-        flags.set(ModifierFlags::CTRL, ctrl);
-        flags.set(ModifierFlags::ALT, alt);
         flags.set(ModifierFlags::SHIFT, shift);
+        flags.set(ModifierFlags::NUM_LOCK, num_lock);
+        flags.set(ModifierFlags::CAPS_LOCK, caps_lock);
         flags
+    }
+}
+
+/// Mapping from a keycode into a character
+pub enum KeyCharMapping {
+    /// A key with no character mapping
+    Empty,
+    /// A key with a constant character mapping
+    Single(char),
+    /// A key with an alternative character mapping when shift is pressed
+    Shifted(char, char),
+    /// A key with an alternative character mapping when either CAPS is enabled or shift is pressed
+    Capitalized(char, char),
+    /// A key that only maps to a character when numlock is disabled
+    NumLocked(char),
+}
+
+impl KeyCharMapping {
+    /// Gets the character for this char based on the given modifiers
+    pub fn char(&self, modifiers: ModifierFlags) -> Option<char> {
+        use self::KeyCharMapping::*;
+        match *self {
+            Single(character) => Some(character),
+            Shifted(character, shifted) => if modifiers.contains(ModifierFlags::SHIFT) {
+                Some(shifted)
+            } else {
+                Some(character)
+            },
+            Capitalized(character, capital) => if modifiers.contains(ModifierFlags::CAPS_LOCK) ^ modifiers.contains(ModifierFlags::SHIFT) {
+                Some(capital)
+            } else {
+                Some(character)
+            },
+            NumLocked(character) if !modifiers.contains(ModifierFlags::NUM_LOCK) => Some(character),
+            _ => None,
+        }
     }
 }
 
@@ -78,7 +128,6 @@ pub enum KeyEventType {
     Repeat,
 }
 
-// TODO: Support caps lock, number lock and scroll lock! (check keyboard-enhancement branch)
 /// Interface to a generic keyboard.
 pub trait Keyboard {
     type Error;
@@ -111,11 +160,20 @@ pub trait Keyboard {
     /// }
     /// ```
     fn pressed(&self, keycode: Keycode) -> bool;
+
+    fn num_lock(&self) -> bool;
+
+    fn scroll_lock(&self) -> bool;
+
+    fn caps_lock(&self) -> bool;
+
+    fn function_lock(&self) -> bool;
 }
 
 /// Handles interface to a PS/2 keyboard, if available
 pub struct Ps2Keyboard {
     key_states: [bool; 0xFF],
+    state: StateFlags,
 }
 
 impl Ps2Keyboard {
@@ -131,6 +189,7 @@ impl Ps2Keyboard {
         ps2::CONTROLLER.lock().set_keyboard_change_listener(Ps2Keyboard::on_keyboard_change);
         Ps2Keyboard {
             key_states: [false; 0xFF],
+            state: StateFlags::empty(),
         }
     }
 
@@ -150,18 +209,13 @@ impl Ps2Keyboard {
     /// assert_eq!(event.event_type, KeyEventType::Make);
     /// ```
     fn create_event(&self, scancode: &ps2::device::keyboard::Scancode) -> Option<KeyEvent> {
-        let ctrl = self.pressed(keymap::codes::LEFT_CONTROL) || self.pressed(keymap::codes::RIGHT_CONTROL);
-        let alt = self.pressed(keymap::codes::LEFT_ALT) || self.pressed(keymap::codes::RIGHT_ALT);
         let shift = self.pressed(keymap::codes::LEFT_SHIFT) || self.pressed(keymap::codes::RIGHT_SHIFT);
-        let modifiers = ModifierFlags::from_modifiers(ctrl, alt, shift);
+        let num_lock = self.state.contains(StateFlags::NUM_LOCK);
+        let caps_lock = self.state.contains(StateFlags::CAPS_LOCK);
+        let modifiers = ModifierFlags::from_modifiers(shift, num_lock, caps_lock);
 
         if let Ok(keycode) = (*scancode).try_into() {
-            let char = keymap::get_us_qwerty_char(keycode)
-                .map(|chars| if shift {
-                    chars.1
-                } else {
-                    chars.0
-                });
+            let char = keymap::get_us_qwerty_char(keycode).char(modifiers);
 
             // If the key was already pressed and make was sent, this is a repeat event
             let event_type = match scancode.make {
@@ -175,6 +229,20 @@ impl Ps2Keyboard {
             None
         }
     }
+
+    // TODO: Update LEDs
+    fn handle_state(&mut self, event: KeyEvent) {
+        if event.event_type == KeyEventType::Make {
+            use self::keymap::codes::*;
+            match event.keycode {
+                SCROLL_LOCK => self.state.toggle(StateFlags::SCROLL_LOCK),
+                NUM_LOCK => self.state.toggle(StateFlags::NUM_LOCK),
+                CAPS_LOCK => self.state.toggle(StateFlags::CAPS_LOCK),
+                ESCAPE if self.pressed(FUNCTION) => self.state.toggle(StateFlags::FUNCTION_LOCK),
+                _ => (),
+            }
+        }
+    }
 }
 
 impl Keyboard for Ps2Keyboard {
@@ -185,6 +253,8 @@ impl Keyboard for Ps2Keyboard {
         Ok(keyboard.read_scancode()?.map(|scancode| {
             let event = self.create_event(&scancode);
             if let Some(event) = event {
+                // Update states such as caps lock with this key event
+                self.handle_state(event);
                 self.key_states[event.keycode as usize] = scancode.make;
             } else {
                 // If we received a scancode but it was invalid, the device probably changed.
@@ -197,6 +267,14 @@ impl Keyboard for Ps2Keyboard {
     fn pressed(&self, keycode: Keycode) -> bool {
         *self.key_states.get(keycode as usize).unwrap_or(&false)
     }
+
+    fn num_lock(&self) -> bool { self.state.contains(StateFlags::NUM_LOCK) }
+
+    fn scroll_lock(&self) -> bool { self.state.contains(StateFlags::SCROLL_LOCK) }
+
+    fn caps_lock(&self) -> bool { self.state.contains(StateFlags::CAPS_LOCK) }
+
+    fn function_lock(&self) -> bool { self.state.contains(StateFlags::FUNCTION_LOCK) }
 }
 
 pub enum UnknownScancode {
