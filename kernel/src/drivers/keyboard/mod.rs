@@ -275,7 +275,7 @@ impl Keyboard for Ps2Keyboard {
 
     fn pressed(&self, keycode: Keycode) -> bool {
         let index = keycode as usize;
-        let bucket = *self.key_state_map.get(index / 8).unwrap_or(0);
+        let bucket = *self.key_state_map.get(index / 8).unwrap_or(&0);
         let bit_index = (index % 8);
         ((bucket >> bit_index) & 1) != 0
     }
