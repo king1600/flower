@@ -170,11 +170,12 @@ pub trait Keyboard {
     fn function_lock(&self) -> bool;
 }
 
-const KEY_STATE_LENGTH: usize = 0xFF / 8;
+const KEY_STATE_WORD_WIDTH: usize = 8;
+const KEY_STATE_LENGTH: usize = 0xFF / KEY_STATE_WORD_WIDTH;
 
 /// Handles interface to a PS/2 keyboard, if available
 pub struct Ps2Keyboard {
-    key_state_map: [u8; KEY_STATE_LENGTH],
+    key_state_words: [u8; KEY_STATE_LENGTH],
     state: StateFlags,
 }
 
@@ -190,7 +191,7 @@ impl Ps2Keyboard {
     pub fn new() -> Self {
         ps2::CONTROLLER.lock().set_keyboard_change_listener(Ps2Keyboard::on_keyboard_change);
         Ps2Keyboard {
-            key_state_map: [0; KEY_STATE_LENGTH],
+            key_state_words: [0; KEY_STATE_LENGTH],
             state: StateFlags::empty(),
         }
     }
@@ -232,10 +233,10 @@ impl Ps2Keyboard {
         }
     }
 
-    // TODO: Update LEDs
-    fn handle_state(&mut self, event: KeyEvent) {
+    fn handle_state(&mut self, keyboard: &mut ps2::device::keyboard::Keyboard, event: KeyEvent) -> Result<(), Ps2Error> {
         if event.event_type == KeyEventType::Make {
             use self::keymap::codes::*;
+            let last_state = self.state.clone();
             match event.keycode {
                 SCROLL_LOCK => self.state.toggle(StateFlags::SCROLL_LOCK),
                 NUM_LOCK => self.state.toggle(StateFlags::NUM_LOCK),
@@ -243,7 +244,11 @@ impl Ps2Keyboard {
                 ESCAPE if self.pressed(FUNCTION) => self.state.toggle(StateFlags::FUNCTION_LOCK),
                 _ => (),
             }
+            if self.state != last_state {
+                keyboard.set_leds(self.state.into())?;
+            }
         }
+        Ok(())
     }
 }
 
@@ -252,32 +257,34 @@ impl Keyboard for Ps2Keyboard {
 
     fn read_event(&mut self) -> Result<Option<KeyEvent>, Ps2Error> {
         let mut keyboard = ps2::CONTROLLER.lock().keyboard()?;
-        Ok(keyboard.read_scancode()?.map(|scancode| {
+        Ok(if let Some(scancode) = keyboard.read_scancode()? {
             let event = self.create_event(&scancode);
             if let Some(event) = event {
                 // Update states such as caps lock with this key event
-                self.handle_state(event);
+                self.handle_state(&mut keyboard, event)?;
                 let index = event.keycode as usize;
-                let bit = 1 << (index % 8);
-                let bucket_index = index / 8;
+                let bit = 1 << (index % KEY_STATE_WORD_WIDTH);
+                let word_index = index / KEY_STATE_WORD_WIDTH;
                 if scancode.make {
-                    self.key_state_map[bucket_index] |= bit;
+                    self.key_state_words[word_index] |= bit;
                 } else {
-                    self.key_state_map[bucket_index] &= !bit;
+                    self.key_state_words[word_index] &= !bit;
                 }
             } else {
                 // If we received a scancode but it was invalid, the device probably changed.
                 keyboard.set_port_dirty(true);
             }
             event
-        }).unwrap_or(None))
+        } else {
+            None
+        })
     }
 
     fn pressed(&self, keycode: Keycode) -> bool {
         let index = keycode as usize;
-        let bucket = *self.key_state_map.get(index / 8).unwrap_or(&0);
-        let bit_index = (index % 8);
-        ((bucket >> bit_index) & 1) != 0
+        let word = *self.key_state_words.get(index / KEY_STATE_WORD_WIDTH).unwrap_or(&0);
+        let bit_index = index % KEY_STATE_WORD_WIDTH;
+        ((word >> bit_index) & 1) != 0
     }
 
     fn num_lock(&self) -> bool { self.state.contains(StateFlags::NUM_LOCK) }
@@ -321,3 +328,21 @@ impl TryFrom<ps2::device::keyboard::Scancode> for Keycode {
         }
     }
 }
+
+impl From<StateFlags> for ps2::device::keyboard::LedFlags {
+    fn from(state: StateFlags) -> Self {
+        use ps2::device::keyboard::LedFlags;
+        let mut flags = LedFlags::empty();
+        if state.contains(StateFlags::SCROLL_LOCK) {
+            flags.insert(LedFlags::SCROLL_LOCK);
+        }
+        if state.contains(StateFlags::NUM_LOCK) {
+            flags.insert(LedFlags::NUMBER_LOCK);
+        }
+        if state.contains(StateFlags::CAPS_LOCK) {
+            flags.insert(LedFlags::CAPS_LOCK);
+        }
+        flags
+    }
+}
+
