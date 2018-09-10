@@ -158,6 +158,10 @@ impl DevicePort {
 pub trait Device {
     fn port(&self) -> &Mutex<Option<DevicePort>>;
 
+    fn port_type(&self) -> Option<PortType> {
+        self.port().lock().as_ref().map(|p| p.port_type)
+    }
+
     fn is_mouse(&self) -> bool;
 
     fn is_keyboard(&self) -> bool;

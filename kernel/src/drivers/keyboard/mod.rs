@@ -147,19 +147,19 @@ pub trait Keyboard {
     // TODO: This should eventually use interrupts and hold a queue
     fn read_event(&mut self) -> Result<Option<KeyEvent>, Self::Error>;
 
-    /// Returns `true` if the given keycode is currently being pressed
+    /// Returns `true` if the given keycode is currently being held down
     ///
     /// ```rust,no_run
     /// let device = drivers::ps2::CONTROLLER.device(drivers::ps2::DevicePort::Keyboard);
     /// let mut keyboard = Ps2Keyboard::new(device);
     ///
-    /// if keyboard.pressed(keymap::codes::LEFT_SHIFT) {
-    ///     println!("Left shift pressed");
+    /// if keyboard.is_down(keymap::codes::LEFT_SHIFT) {
+    ///     println!("Left shift down");
     /// } else {
-    ///     println!("Left shift not pressed");
+    ///     println!("Left shift not down");
     /// }
     /// ```
-    fn pressed(&self, keycode: Keycode) -> bool;
+    fn is_down(&self, keycode: Keycode) -> bool;
 
     fn num_lock(&self) -> bool;
 
@@ -171,10 +171,12 @@ pub trait Keyboard {
 }
 
 const KEY_STATE_WORD_WIDTH: usize = 8;
+/// The amount of words each containing 8 key state bits
 const KEY_STATE_LENGTH: usize = 0xFF / KEY_STATE_WORD_WIDTH;
 
 /// Handles interface to a PS/2 keyboard, if available
 pub struct Ps2Keyboard {
+    /// Bitmap containing state of every key. 8 key states are stored per entry (word)
     key_state_words: [u8; KEY_STATE_LENGTH],
     state: StateFlags,
 }
@@ -212,7 +214,7 @@ impl Ps2Keyboard {
     /// assert_eq!(event.event_type, KeyEventType::Make);
     /// ```
     fn create_event(&self, scancode: &ps2::device::keyboard::Scancode) -> Option<KeyEvent> {
-        let shift = self.pressed(keymap::codes::LEFT_SHIFT) || self.pressed(keymap::codes::RIGHT_SHIFT);
+        let shift = self.is_down(keymap::codes::LEFT_SHIFT) || self.is_down(keymap::codes::RIGHT_SHIFT);
         let num_lock = self.state.contains(StateFlags::NUM_LOCK);
         let caps_lock = self.state.contains(StateFlags::CAPS_LOCK);
         let modifiers = ModifierFlags::from_modifiers(shift, num_lock, caps_lock);
@@ -222,7 +224,7 @@ impl Ps2Keyboard {
 
             // If the key was already pressed and make was sent, this is a repeat event
             let event_type = match scancode.make {
-                true if self.pressed(keycode) => KeyEventType::Repeat,
+                true if self.is_down(keycode) => KeyEventType::Repeat,
                 true => KeyEventType::Make,
                 false => KeyEventType::Break,
             };
@@ -236,15 +238,15 @@ impl Ps2Keyboard {
     fn handle_state(&mut self, keyboard: &mut ps2::device::keyboard::Keyboard, event: KeyEvent) -> Result<(), Ps2Error> {
         if event.event_type == KeyEventType::Make {
             use self::keymap::codes::*;
-            let last_state = self.state.clone();
+            let last_state = self.state.bits();
             match event.keycode {
                 SCROLL_LOCK => self.state.toggle(StateFlags::SCROLL_LOCK),
                 NUM_LOCK => self.state.toggle(StateFlags::NUM_LOCK),
                 CAPS_LOCK => self.state.toggle(StateFlags::CAPS_LOCK),
-                ESCAPE if self.pressed(FUNCTION) => self.state.toggle(StateFlags::FUNCTION_LOCK),
+                ESCAPE if self.is_down(FUNCTION) => self.state.toggle(StateFlags::FUNCTION_LOCK),
                 _ => (),
             }
-            if self.state != last_state {
+            if self.state.bits() != last_state {
                 keyboard.set_leds(self.state.into())?;
             }
         }
@@ -280,7 +282,7 @@ impl Keyboard for Ps2Keyboard {
         })
     }
 
-    fn pressed(&self, keycode: Keycode) -> bool {
+    fn is_down(&self, keycode: Keycode) -> bool {
         let index = keycode as usize;
         let word = *self.key_state_words.get(index / KEY_STATE_WORD_WIDTH).unwrap_or(&0);
         let bit_index = index % KEY_STATE_WORD_WIDTH;

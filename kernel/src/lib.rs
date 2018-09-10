@@ -132,7 +132,7 @@ fn keyboard_echo_loop(mut keyboard: Ps2Keyboard) -> ! {
 
 fn check_keyboard() -> bool {
     if let Ok(keyboard) = ps2::CONTROLLER.lock().keyboard() {
-        info!("kbd: detected in {:?}", keyboard.port().lock().as_ref().unwrap().port_type);
+        info!("kbd: detected in {:?}", keyboard.port_type().unwrap());
         true
     } else {
         warn!("kbd: not available");
@@ -142,7 +142,7 @@ fn check_keyboard() -> bool {
 
 fn check_mouse() -> bool {
     if let Ok(mouse) = ps2::CONTROLLER.lock().mouse() {
-        info!("mouse: detected in {:?}", mouse.port().lock().as_ref().unwrap().port_type);
+        info!("mouse: detected in {:?}", mouse.port_type().unwrap());
         true
     } else {
         warn!("mouse: not available");

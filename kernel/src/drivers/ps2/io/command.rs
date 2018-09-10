@@ -76,24 +76,25 @@ pub mod device {
         }
     }
 
+    #[allow(dead_code)] // TODO: Mouse driver not yet implemented
     pub mod mouse {
         /// Represents a PS/2 mouse command without a return and without additional data
         #[derive(Copy, Clone, Debug)]
         #[repr(u8)]
         pub enum Command {
-            SetRemoteMode = 0xF0, // TODO: Call
-            SetWrapMode = 0xEE, // TODO: Call
-            SetStreamMode = 0xEA, // TODO: Call
-            StatusRequest = 0xE9, // TODO: Call
-            RequestSinglePacket = 0xEB, // TODO: Call (check device removal; is this a returning packet?)
+            SetRemoteMode = 0xF0,
+            SetWrapMode = 0xEE,
+            SetStreamMode = 0xEA,
+            StatusRequest = 0xE9,
+            RequestSinglePacket = 0xEB,
         }
 
         /// Represents a PS/2 mouse command where additional data can be sent
         #[derive(Copy, Clone, Debug)]
         #[repr(u8)]
         pub enum DataCommand {
-            SetSampleRate = 0xF3, // TODO: Call
-            SetResolution = 0xE8, // TODO: Call
+            SetSampleRate = 0xF3,
+            SetResolution = 0xE8,
         }
     }
 }
