@@ -3,7 +3,6 @@
 #![feature(asm)]
 #![feature(lang_items)]
 #![feature(const_fn)]
-#![feature(unique, const_unique_new)]
 #![feature(slice_rotate)]
 #![feature(try_from)]
 #![feature(nll)]
@@ -16,7 +15,6 @@
 #![feature(alloc, allocator_api, global_allocator, box_syntax)]
 #![feature(abi_x86_interrupt)]
 #![feature(compiler_builtins_lib)]
-#![feature(impl_trait)]
 #![feature(panic_implementation)]
 #![feature(panic_info_message)]
 
